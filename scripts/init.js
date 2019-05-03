@@ -5,6 +5,9 @@ import commander from "commander";
 import chalk from "chalk";
 import inquirer from "inquirer";
 import validateProjectName from "validate-npm-package-name";
+import Listr from "listr";
+import execa from "execa";
+import { install } from "pkg-install";
 
 import packageJson from "../package.json";
 
@@ -136,29 +139,89 @@ function isSafeToCreateProjectIn(root, name) {
   return true;
 }
 
-function createPackageJsonFile(name) {
-  const root = path.resolve(name);
-  const appName = path.basename(root);
+function getDependencies(useTypeScript) {
+  let allDependecies = ["react", "react-dom"];
 
-  checkAppName(appName);
+  if (useTypeScript) {
+    allDependecies.push(
+      "@types/node",
+      "@types/react",
+      "@types/react-dom",
+      "typescript"
+    );
+  }
 
-  fs.ensureDirSync(name);
-  if (!isSafeToCreateProjectIn(root, name)) {
+  return allDependecies;
+}
+
+function createPackageJsonFile(projectName, appPath) {
+  checkAppName(projectName);
+
+  fs.ensureDirSync(projectName);
+  if (!isSafeToCreateProjectIn(appPath, projectName)) {
     process.exit(1);
   }
 
-  console.log(`Creating a new Fusion app in ${chalk.green(root)}`);
+  console.log(`Creating a new Fusion app in ${chalk.green(appPath)}`);
   console.log();
 
   const packageJson = {
-    name: appName,
+    name: projectName,
     version: "0.1.0",
     private: true
   };
   fs.writeFileSync(
-    path.join(root, "package.json"),
+    path.join(appPath, "package.json"),
     JSON.stringify(packageJson, null, 2) + os.EOL
   );
+}
+
+function copyScriptToPackageJson(appPath) {
+  const appPackage = require(path.join(appPath, "package.json"));
+  appPackage.dependencies = appPackage.dependencies || {};
+
+  appPackage.scripts = {
+    start: "fusion-scripts start",
+    build: "fusion-scripts build"
+  };
+
+  appPackage.eslintConfig = {
+    extends: "react-app"
+  };
+
+  fs.writeFileSync(
+    path.join(appPath, "package.json"),
+    JSON.stringify(appPackage, null, 2) + os.EOL
+  );
+}
+
+function backupOldReadme(appPath) {
+  const readmeExists = fs.existsSync(path.join(appPath, "README.md"));
+  if (readmeExists) {
+    fs.renameSync(
+      path.join(appPath, "README.md"),
+      path.join(appPath, "README.old.md")
+    );
+  }
+}
+
+function copyTemplateFiles(appPath, useTypeScript) {
+  const ownPath = path.dirname(
+    require.resolve(path.join(__dirname, "..", "package.json"))
+  );
+  const templatePath = path.join(
+    ownPath,
+    useTypeScript ? "templates/typescript" : "templates/javascript"
+  );
+
+  if (fs.existsSync(templatePath)) {
+    fs.copySync(templatePath, appPath);
+  } else {
+    console.error(
+      `Could not locate supplied template: ${chalk.green(templatePath)}`
+    );
+    return;
+  }
 }
 
 export async function init(args) {
@@ -177,53 +240,62 @@ export async function init(args) {
     .option("-t, --typescript")
     .parse(args);
 
-  let options = await promptForMissingOptions(program);
-
-  createPackageJsonFile(projectName);
-
-  const ownPath = path.dirname(
-    require.resolve(path.join(__dirname, "..", "package.json"))
-  );
+  const options = await promptForMissingOptions(program);
   const appPath = path.resolve(projectName);
-  const appPackage = require(path.join(appPath, "package.json"));
+  const dependencies = getDependencies(options.typescript);
+  console.log("dependencies", dependencies);
+  console.log("dep2", { ...dependencies });
 
-  appPackage.dependencies = appPackage.dependencies || {};
+  const tasks = new Listr([
+    {
+      title: "Creating package.json file",
+      task: ctx => {
+        createPackageJsonFile(projectName, appPath);
+      }
+    },
+    {
+      title: "Copying scripts to package.json",
+      task: () => copyScriptToPackageJson(appPath)
+    },
+    {
+      title: "Backing up existing README file",
+      task: () => backupOldReadme(appPath)
+    },
+    {
+      title: "Copying template files",
+      task: () => copyTemplateFiles(appPath, options.typescript)
+    },
+    {
+      title: "Install package dependencies with Yarn",
+      enabled: ctx => ctx.yarn === true,
+      task: () =>
+        install(dependencies, {
+          cwd: appPath,
+          prefer: "yarn"
+        })
+    },
+    {
+      title: "Install package dependencies with npm",
+      enabled: ctx => ctx.yarn === false,
+      task: () =>
+        projectInstall({
+          cwd: appPath,
+          prefer: "npm"
+        })
+    }
+  ]);
 
-  const useTypeScript = options.typescript;
-  console.log("useTypescript", useTypeScript);
+  await tasks
+    .run({
+      yarn: options.useYarn
+    })
+    .then(ctx => {
+      console.log("ctx", ctx);
+    });
 
-  appPackage.scripts = {
-    start: "fusion-scripts start",
-    build: "fusion-scripts build"
-  };
+  console.log();
+  console.log("%s Project ready", chalk.green.bold("DONE"));
+  console.log();
 
-  appPackage.eslintConfig = {
-    extends: "react-app"
-  };
-
-  fs.writeFileSync(
-    path.join(appPath, "package.json"),
-    JSON.stringify(appPackage, null, 2) + os.EOL
-  );
-
-  const readmeExists = fs.existsSync(path.join(appPath, "README.md"));
-  if (readmeExists) {
-    fs.renameSync(
-      path.join(appPath, "README.md"),
-      path.join(appPath, "README.old.md")
-    );
-  }
-
-  const templatePath = path.join(
-    ownPath,
-    useTypeScript ? "templates/typescript" : "templates/javascript"
-  );
-  if (fs.existsSync(templatePath)) {
-    fs.copySync(templatePath, appPath);
-  } else {
-    console.error(
-      `Could not locate supplied template: ${chalk.green(templatePath)}`
-    );
-    return;
-  }
+  return true;
 }
