@@ -34,7 +34,6 @@
     "inquirer": "^6.3.1",
     "ncp": "^2.0.0",
     "semver": "^6.0.0",
-    "tar-pack": "^3.4.1",
     "tmp": "^0.1.0",
     "validate-npm-package-name": "^3.0.0"
   }
