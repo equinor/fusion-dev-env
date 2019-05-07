@@ -1,4 +1,5 @@
 const fs = require("fs");
+const https = require("https");
 const path = require("path");
 const webpack = require("webpack");
 const merge = require("webpack-merge");
@@ -46,10 +47,13 @@ const compiler = webpack(merge(appConfig, babel));
 
 const app = express();
 
-app.use(devMiddleware(compiler));
+app.use(
+  devMiddleware(compiler, {
+    noInfo: true,
+    stats: false
+  })
+);
 app.use(hotMiddleware(compiler));
-
-//app.use(express.static("dist"));
 
 app.get("/fusion.bundle.js", (req, res) => {
   res.sendFile(path.resolve(__dirname, "..", "dist", "fusion.bundle.js"));
@@ -59,4 +63,16 @@ app.get("/", (req, res) => {
   res.sendFile(path.resolve(__dirname, "..", "dist", "index.html"));
 });
 
-app.listen(3000, () => console.log("Fusion App listening on port 3000!"));
+https
+  .createServer(
+    {
+      key: fs.readFileSync(path.resolve(__dirname, "..", "keys", "server.key")),
+      cert: fs.readFileSync(
+        path.resolve(__dirname, "..", "keys", "server.cert")
+      )
+    },
+    app
+  )
+  .listen(3000, () => {
+    console.log("Fusion App listening on port 3000!");
+  });
